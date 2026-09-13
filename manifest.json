@@ -1,0 +1,13 @@
+{
+  "name": "Claude Bridge",
+  "id": "claude-bridge-figma-plugin",
+  "api": "1.0.0",
+  "main": "dist/code.js",
+  "ui": "src/ui.html",
+  "editorType": ["figma", "figjam"],
+  "networkAccess": {
+    "allowedDomains": ["http://localhost:8722", "ws://localhost:8722"],
+    "reasoning": "Connects to a local MCP bridge server (run alongside the Claude CLI) so Claude can read and edit the open Figma file."
+  },
+  "documentAccess": "dynamic-page"
+}

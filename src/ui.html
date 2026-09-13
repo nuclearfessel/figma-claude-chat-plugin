@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Claude Bridge</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --fg: #1e1e1e;
+    --muted: #6e6e6e;
+    --border: #e5e5e5;
+    --ok: #1a9c5f;
+    --err: #d33;
+    --accent: #7857ff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #2c2c2c;
+      --fg: #f2f2f2;
+      --muted: #a8a8a8;
+      --border: #444;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 12px;
+    color: var(--fg);
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  header h1 { font-size: 13px; font-weight: 600; margin: 0; }
+  #status-badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  #status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--err);
+    flex-shrink: 0;
+  }
+  #status-dot.connected { background: var(--ok); }
+
+  #info {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    color: var(--muted);
+    line-height: 1.5;
+  }
+  #info code {
+    background: rgba(120,87,255,0.12);
+    color: var(--accent);
+    padding: 1px 4px;
+    border-radius: 4px;
+  }
+
+  #log {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .entry {
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: rgba(120,120,120,0.08);
+    font-family: "SF Mono", Consolas, monospace;
+    font-size: 11px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .entry.error { color: var(--err); background: rgba(221,51,51,0.08); }
+  .entry .time { color: var(--muted); margin-right: 6px; }
+  #empty {
+    margin: auto;
+    text-align: center;
+    color: var(--muted);
+    padding: 24px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Claude Bridge</h1>
+  <div id="status-badge">
+    <span id="status-dot"></span>
+    <span id="status-text">Connecting…</span>
+  </div>
+</header>
+
+<div id="info">
+  Run the bridge server locally, then register it with the Claude CLI so any
+  session can read and edit this file:
+  <br /><code>claude mcp add figma-bridge -- node /path/to/server/index.js</code>
+</div>
+
+<div id="log">
+  <div id="empty">Waiting for commands from Claude…</div>
+</div>
+
+<script>
+(function () {
+  const PORT = 8722;
+  const statusDot = document.getElementById("status-dot");
+  const statusText = document.getElementById("status-text");
+  const logEl = document.getElementById("log");
+  const emptyEl = document.getElementById("empty");
+
+  let ws = null;
+  let reconnectTimer = null;
+
+  function log(text, isError) {
+    emptyEl.style.display = "none";
+    const el = document.createElement("div");
+    el.className = "entry" + (isError ? " error" : "");
+    const time = document.createElement("span");
+    time.className = "time";
+    time.textContent = new Date().toLocaleTimeString();
+    el.appendChild(time);
+    el.appendChild(document.createTextNode(text));
+    logEl.appendChild(el);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function setStatus(connected, text) {
+    statusDot.classList.toggle("connected", connected);
+    statusText.textContent = text;
+  }
+
+  function connect() {
+    setStatus(false, "Connecting…");
+    ws = new WebSocket("ws://localhost:" + PORT);
+
+    ws.onopen = () => {
+      setStatus(true, "Connected");
+      log("Connected to bridge server on port " + PORT + ".");
+    };
+
+    ws.onclose = () => {
+      setStatus(false, "Disconnected — retrying…");
+      reconnectTimer = setTimeout(connect, 2000);
+    };
+
+    ws.onerror = () => {
+      // onclose fires right after; the retry loop there is enough.
+    };
+
+    ws.onmessage = async (event) => {
+      let cmd;
+      try {
+        cmd = JSON.parse(event.data);
+      } catch (e) {
+        return;
+      }
+      log("→ " + cmd.type + (cmd.nodeId ? " (" + cmd.nodeId + ")" : ""));
+      parent.postMessage({ pluginMessage: cmd }, "*");
+    };
+  }
+
+  window.onmessage = (event) => {
+    const msg = event.data.pluginMessage;
+    if (!msg || !ws || ws.readyState !== WebSocket.OPEN) return;
+    if (msg.type === "error") {
+      log("✕ " + msg.message, true);
+    } else if (msg.type === "result") {
+      log("✓ " + JSON.stringify(msg.result));
+    }
+    ws.send(JSON.stringify(msg));
+  };
+
+  connect();
+
+  window.addEventListener("beforeunload", () => {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (ws) ws.close();
+  });
+})();
+</script>
+
+</body>
+</html>
