@@ -110,6 +110,28 @@ Add more by pairing a `case` in `src/code.ts`'s `handle()` with a
 `server.registerTool(...)` call in `server/index.js` — they share the same
 `{ id, type, ...payload }` command shape over the WebSocket.
 
+### `figma_send_message` / `figma_check_messages` (cross-session mailbox)
+
+There's no public API for one process to push into an arbitrary
+*already-running* Claude session's context — the session-to-session
+messaging you may have seen elsewhere is internal to whatever harness is
+hosting that session, not something a plain server can call into. So this
+is a simple mailbox instead, and it works with any `claude` session that has
+`figma-bridge` registered — a separate terminal, Claude Desktop, or even the
+embedded panel chat itself:
+
+- `figma_send_message({ text })` — pushes a message into the Claude Bridge
+  panel's chat, rendered as a distinct "Claude Code" bubble so it's clearly
+  not the embedded assistant talking.
+- `figma_check_messages()` — returns the last 50 messages someone typed into
+  the panel's chat box (id + text + timestamp each), so a separate session
+  can pick up on them next time it checks in. Non-destructive — call it
+  again later and you'll see the same messages plus any new ones.
+
+Both live in `server/index.js` right alongside the `figma_*` tools, so they
+work identically whether the calling session is the hub or a proxy. The
+mailbox is in-memory only (capped at 50 entries), reset on hub restart.
+
 ### `figma_*` / `figjam_*` (from [figma-console-mcp](https://github.com/southleft/figma-console-mcp), also wired in)
 
 The embedded chat session also gets every tool from `figma-console-mcp`

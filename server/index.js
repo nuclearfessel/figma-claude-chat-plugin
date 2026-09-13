@@ -1,11 +1,16 @@
 #!/usr/bin/env node
-// Bridges Claude to a running Figma plugin, two ways at once:
+// Bridges Claude to a running Figma plugin, three ways at once:
 //
 //  1. MCP tools (stdio) so any `claude` CLI session can read/edit the open
 //     Figma file — figma_get_status, figma_rename_node, etc.
 //  2. A persistent embedded `claude -p` chat session that the Figma plugin's
 //     own panel talks to directly, so you can prompt Claude from inside
 //     Figma. That embedded session gets the same figma_* tools.
+//  3. A small message mailbox (figma_send_message / figma_check_messages)
+//     so a separate `claude` session — a terminal, Claude Desktop, or the
+//     embedded panel chat itself — can exchange messages with the Figma
+//     panel's chat, since there's no way to push into an arbitrary
+//     already-running Claude session's context otherwise.
 //
 // Every `claude mcp add figma-bridge ...` session spawns its own copy of
 // this file over stdio. Only one of them can own the WebSocket server that
@@ -37,6 +42,19 @@ let pluginSocket = null;
 const pending = new Map(); // id -> { resolve, reject, timer }
 let isHub = false;
 
+// Mailbox for cross-session messaging: any `claude` session with figma-bridge
+// registered (a separate terminal, Claude Desktop, or the embedded panel chat
+// itself) can push a message into the Figma panel's chat (figma_send_message)
+// or pull recent messages someone typed into that panel (figma_check_messages).
+// Hub-owned, capped, in-memory only — not persisted across hub restarts.
+const OUTBOX_LIMIT = 50;
+const outbox = []; // { id, text, timestamp }
+
+function recordOutboxMessage(text) {
+  outbox.push({ id: randomUUID(), text, timestamp: Date.now() });
+  if (outbox.length > OUTBOX_LIMIT) outbox.shift();
+}
+
 // ---------------------------------------------------------------------------
 // Hub election: try to bind the port. Winner owns the WebSocket to the Figma
 // plugin and a tiny HTTP relay; losers proxy figma_* calls through that HTTP
@@ -60,6 +78,30 @@ const httpServer = createServer((req, res) => {
     });
     return;
   }
+
+  if (req.method === "POST" && req.url === "/send-message") {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      try {
+        const { text } = JSON.parse(body || "{}");
+        hubSendExternalMessage(text);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (err) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+      }
+    });
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/check-messages") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ messages: outbox }));
+    return;
+  }
+
   res.writeHead(404);
   res.end();
 });
@@ -86,6 +128,7 @@ wss.on("connection", (socket) => {
     }
 
     if (msg.type === "chat:send" && typeof msg.text === "string") {
+      recordOutboxMessage(msg.text);
       sendChatMessage(msg.text);
       return;
     }
@@ -140,6 +183,38 @@ async function proxySendCommand(type, payload = {}) {
 
 async function sendCommand(type, payload) {
   return isHub ? hubSendCommand(type, payload) : proxySendCommand(type, payload);
+}
+
+function hubSendExternalMessage(text) {
+  if (typeof text !== "string" || !text.trim()) {
+    throw new Error("text must be a non-empty string");
+  }
+  chatBroadcast({ type: "chat:external", text });
+}
+
+async function proxySendExternalMessage(text) {
+  const res = await fetch(`http://localhost:${PORT}/send-message`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Bridge hub request failed (${res.status})`);
+}
+
+async function sendExternalMessage(text) {
+  return isHub ? hubSendExternalMessage(text) : proxySendExternalMessage(text);
+}
+
+async function proxyCheckMessages() {
+  const res = await fetch(`http://localhost:${PORT}/check-messages`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `Bridge hub request failed (${res.status})`);
+  return data.messages;
+}
+
+async function checkMessages() {
+  return isHub ? outbox : proxyCheckMessages();
 }
 
 async function electHub() {
@@ -358,6 +433,33 @@ server.registerTool(
   },
   async ({ x, y, width, height, name }) =>
     textResult(await sendCommand("create-rectangle", { x, y, width, height, name }))
+);
+
+server.registerTool(
+  "figma_send_message",
+  {
+    title: "Send a message to the Claude Bridge panel",
+    description:
+      "Push a message into the chat shown in the Claude Bridge Figma plugin panel, so whoever's looking at Figma sees it. Use this to relay something from a separate Claude Code session (e.g. one running in Claude Desktop) into the Figma panel's chat.",
+    inputSchema: {
+      text: z.string().min(1),
+    },
+  },
+  async ({ text }) => {
+    await sendExternalMessage(text);
+    return textResult({ ok: true });
+  }
+);
+
+server.registerTool(
+  "figma_check_messages",
+  {
+    title: "Check messages sent from the Claude Bridge panel",
+    description:
+      "Get recent messages someone typed into the Claude Bridge Figma plugin panel's chat box, so a separate Claude Code session (e.g. one running in Claude Desktop) can pick up on them. Returns up to the last 50, oldest first; each has an id and timestamp. This is a non-destructive read — call it again later and you'll see the same messages plus any new ones.",
+    inputSchema: {},
+  },
+  async () => textResult(await checkMessages())
 );
 
 await electHub();
