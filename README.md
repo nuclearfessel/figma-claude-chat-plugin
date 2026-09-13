@@ -1,5 +1,7 @@
 # Claude Bridge for Figma
 
+[![GitHub repo](https://img.shields.io/badge/GitHub-nuclearfessel%2Ffigma--claude--chat--plugin-181717?logo=github)](https://github.com/nuclearfessel/figma-claude-chat-plugin)
+
 A Figma plugin + local bridge server that runs Claude *inside* Figma: chat
 with it directly from the plugin panel, and any `claude` CLI session in your
 terminal can also read and edit the open file — no API key needed, since the
