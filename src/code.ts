@@ -2,10 +2,10 @@
 // that's why src/ui.html holds the WebSocket connection(s) to the local bridge
 // server(s) and forwards commands here over postMessage.
 
-import { handleDesktopBridgeCommand, initDesktopBridgeListeners } from "./desktop-bridge-sandbox.js";
+import { handleDesktopBridgeCommand, initDesktopBridge } from "./desktop-bridge-sandbox.js";
 
 figma.showUI(__html__, { width: 420, height: 560, themeColors: true });
-initDesktopBridgeListeners();
+initDesktopBridge();
 
 type Command =
   | { id: string; type: "resize"; width: number; height: number }
@@ -128,7 +128,13 @@ figma.ui.onmessage = async (msg: Command | Record<string, unknown>) => {
     return;
   }
 
-  // Not one of ours — assume it's a figma-console-mcp Desktop Bridge command
-  // (EXECUTE_CODE, GET_VARIABLES, etc.), which posts its own responses.
+  // The Desktop Bridge logic runs in a hidden nested iframe (see
+  // ui.template.html), so its window-shell commands don't apply here: its own
+  // content height is near-zero (hidden), and RESIZE_UI/RELOAD_UI would
+  // otherwise shrink or reload *our* real, visible window instead of a
+  // standalone one. Everything else — EXECUTE_CODE, GET_VARIABLES, etc. — is
+  // unaffected and posts its own responses as usual.
+  if (type === "RESIZE_UI" || type === "RELOAD_UI") return;
+
   await handleDesktopBridgeCommand(msg);
 };

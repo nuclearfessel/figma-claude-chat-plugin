@@ -1,10 +1,41 @@
 // Vendored (near-verbatim) from figma-console-mcp's Desktop Bridge plugin,
 // https://github.com/southleft/figma-console-mcp (MIT), figma-desktop-bridge/code.js.
-// Adapted only at the seams: the original assigns `figma.ui.onmessage` and calls
-// `figma.showUI` itself (both of which src/code.ts already owns for this merged
-// plugin) — those two lines are replaced with a plain exported function and a
-// side-effecting init() call, respectively. Everything between is untouched.
+//
+// The original file runs as a plugin's sole main-thread script: it calls
+// figma.showUI() itself, has top-level immediately-invoked code that talks to
+// the UI (console-capture override, an async variables fetch, cloud-config
+// restore), and assigns figma.ui.onmessage directly. Since this is merged into
+// src/code.ts (which owns figma.showUI/figma.ui.onmessage for the combined
+// plugin) via a plain `import`, and ES module imports evaluate fully before
+// the importing file's own subsequent statements run, that top-level code
+// would otherwise fire before src/code.ts's figma.showUI() call, which fails
+// with "No UI to send a message". So everything that used to run at module
+// top level (variable/helper declarations aside, which are inert until
+// called) is wrapped in initDesktopBridge(), called explicitly from
+// src/code.ts right after figma.showUI(). Only the figma.showUI(...) line
+// itself is removed (line 17 of the original file) — everything else,
+// including PLUGIN_VERSION and other header constants, is unmodified.
 
+/** @type {(msg: any) => Promise<void>} */
+let handleDesktopBridgeCommand;
+
+export function initDesktopBridge() {
+// Figma Desktop Bridge - MCP Plugin
+// Bridges the Figma Plugin API to MCP clients via the plugin's UI iframe.
+// Supports: Variables, Components, Styles, and more.
+// Uses postMessage to communicate with ui.html (bypassing worker sandbox limitations),
+// which then forwards messages to the MCP server over the WebSocket bridge.
+
+// Plugin version — sent in FILE_INFO for server-side version compatibility checks.
+// The server compares this against the version of the plugin files IT ships to
+// detect stale cached plugins. Bumped by scripts/release.sh ONLY when plugin files
+// change (see issue #62); server-only releases leave it alone, so it may lag
+// package.json — that's intentional, not drift.
+var PLUGIN_VERSION = '1.39.0'; // Last release in which plugin files changed.
+
+console.log('🌉 [Desktop Bridge] Plugin loaded (v' + PLUGIN_VERSION + ')');
+
+// Show minimal UI - compact status indicator
 
 // ============================================================================
 // CONSOLE CAPTURE — Intercept console.* in the QuickJS sandbox and forward
@@ -477,7 +508,7 @@ async function resolveSlotNode(params) {
 
 // Listen for requests from UI (e.g., component data requests, write operations)
 
-export async function handleDesktopBridgeCommand(msg) {
+  handleDesktopBridgeCommand = async function (msg) {
 
   // ============================================================================
   // EXECUTE_CODE - Arbitrary code execution (Power Tool)
@@ -7209,9 +7240,8 @@ export async function handleDesktopBridgeCommand(msg) {
       });
     }
   }
-}
+  };
 
-export function initDesktopBridgeListeners() {
 
 // ============================================================================
 // DOCUMENT CHANGE LISTENER - Forward change events for cache invalidation
@@ -7351,3 +7381,5 @@ console.log('🌉 [Desktop Bridge] Plugin will stay open until manually closed')
 // Plugin stays open - no auto-close
 // UI iframe remains accessible so the in-iframe WebSocket bridge client can keep relaying state to the MCP server
 }
+
+export { handleDesktopBridgeCommand };
