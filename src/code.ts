@@ -1,8 +1,11 @@
 // Main thread (sandbox). Has access to the Figma document but no network access —
-// that's why src/ui.html holds the WebSocket connection to the local bridge server
-// and forwards commands here over postMessage.
+// that's why src/ui.html holds the WebSocket connection(s) to the local bridge
+// server(s) and forwards commands here over postMessage.
+
+import { handleDesktopBridgeCommand, initDesktopBridgeListeners } from "./desktop-bridge-sandbox.js";
 
 figma.showUI(__html__, { width: 420, height: 560, themeColors: true });
+initDesktopBridgeListeners();
 
 type Command =
   | { id: string; type: "resize"; width: number; height: number }
@@ -97,15 +100,35 @@ async function handle(cmd: Command): Promise<unknown> {
   }
 }
 
-figma.ui.onmessage = async (cmd: Command) => {
-  try {
-    const result = await handle(cmd);
-    figma.ui.postMessage({ id: cmd.id, type: "result", result });
-  } catch (err) {
-    figma.ui.postMessage({
-      id: cmd.id,
-      type: "error",
-      message: err instanceof Error ? err.message : String(err),
-    });
+const OUR_COMMAND_TYPES = new Set<Command["type"]>([
+  "resize",
+  "get-status",
+  "get-selection",
+  "get-page-nodes",
+  "rename-node",
+  "set-fill-color",
+  "create-rectangle",
+]);
+
+figma.ui.onmessage = async (msg: Command | Record<string, unknown>) => {
+  const type = (msg as { type?: string }).type;
+
+  if (type !== undefined && OUR_COMMAND_TYPES.has(type as Command["type"])) {
+    const cmd = msg as Command;
+    try {
+      const result = await handle(cmd);
+      figma.ui.postMessage({ id: cmd.id, type: "result", result });
+    } catch (err) {
+      figma.ui.postMessage({
+        id: cmd.id,
+        type: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return;
   }
+
+  // Not one of ours — assume it's a figma-console-mcp Desktop Bridge command
+  // (EXECUTE_CODE, GET_VARIABLES, etc.), which posts its own responses.
+  await handleDesktopBridgeCommand(msg);
 };

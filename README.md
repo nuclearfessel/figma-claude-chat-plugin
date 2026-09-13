@@ -8,19 +8,22 @@ terminal can also read and edit the open file — no API key needed, since the
 CLI session you're already signed into does the talking either way.
 
 ```
-                                    +-- MCP (stdio) --  claude (terminal, external)
-                                    |
- Figma plugin panel (src/ui.html)  |
-   |  ^                            |
-   |  | WebSocket (chat + figma_*) |
-   v  |                            |
- server/index.js  <------------- hub/proxy election on localhost:8722 -------
+                                          +-- MCP (stdio) --  claude (terminal, external)
+                                          |
+ Figma plugin panel (dist/ui.html)       |
+   |  ^          |  ^                    |
+   |  |          |  | ws 9223-9232       |
+   |  |          |  v (hidden iframe)    |
+   |  |     figma-console-mcp (spawned by the embedded chat)
+   |  | WebSocket (chat + figma_*)       |
+   v  |                                  |
+ server/index.js  <------------------ hub/proxy election on localhost:8722 --
    |
    +-- spawns an embedded `claude -p` chat session (stream-json), which
-       reaches the same figma_* tools through this same server
+       reaches figma_* AND figma-console-mcp's ~140 tools
    |
    v postMessage
- src/code.ts (Plugin API, runs in Figma's sandbox)
+ dist/code.js (Plugin API + vendored Desktop Bridge logic, Figma's sandbox)
 ```
 
 Every `claude mcp add figma-bridge ...` invocation, and the embedded chat
@@ -28,6 +31,15 @@ session, all spawn their own copy of `server/index.js`. Only one of them can
 bind port 8722 — that one becomes the **hub**, owning the WebSocket to the
 Figma plugin. The rest become **proxies** that relay `figma_*` calls to the
 hub over a tiny HTTP endpoint instead of trying to bind the port themselves.
+
+This is one plugin, not two: `figma-console-mcp`'s own "Desktop Bridge"
+plugin (vendored at `figma-desktop-bridge/`, MIT-licensed, unmodified) runs
+inside a hidden nested iframe within this plugin's own panel, and
+`dist/code.js` is this project's sandbox code plus their vendored command
+handler, merged at build time (see `scripts/build-ui.mjs` and
+`src/desktop-bridge-sandbox.js`). Figma throttles background/unfocused
+plugin panels, so if this were two separate plugins, whichever one didn't
+have focus would stop responding — merging them avoids that entirely.
 
 ## Setup
 
@@ -68,25 +80,14 @@ hub over a tiny HTTP endpoint instead of trying to bind the port themselves.
 
 5. Open a file in Figma, then run the **Claude Bridge** plugin
    (Plugins → Development → Claude Bridge). Its panel shows "Connected"
-   once it reaches the process from step 3.
+   once it reaches the process from step 3 — and, invisibly in the same
+   panel, `figma-console-mcp`'s vendored Desktop Bridge logic starts
+   listening for its own MCP server too (ports 9223–9232), so the tools
+   below work with just this one plugin open. Nothing else to import or
+   run — `figma-desktop-bridge/UPSTREAM_README.md` is there only if you want
+   to read about cloud pairing or other options that vendored code supports.
 
-6. To get the [figma-console-mcp](https://github.com/southleft/figma-console-mcp)
-   tools working too (see the full list below), also import and run its
-   **Figma Desktop Bridge** plugin — vendored into this repo at
-   `figma-desktop-bridge/` (MIT-licensed, unmodified, from that project) so
-   you don't need to clone it separately:
-
-   **Plugins → Development → Import plugin from manifest…** → select
-   `figma-desktop-bridge/manifest.json` → then run it
-   (Plugins → Development → Figma Desktop Bridge).
-
-   It auto-connects to any local `figma-console-mcp` server it finds on
-   ports 9223–9232 — no pairing code needed for local use. This is a
-   separate plugin from Claude Bridge; run both side by side, once per
-   Figma session. `figma-desktop-bridge/UPSTREAM_README.md` has the full
-   upstream docs if you want cloud pairing or other options it supports.
-
-7. Chat with Claude right in the plugin panel — type in the box at the
+6. Chat with Claude right in the plugin panel — type in the box at the
    bottom. It gets its own persistent session, restricted to the tools
    listed below (no shell/file access on your machine), and can both answer
    questions and edit the file. You can *also* ask Claude to inspect or edit
@@ -115,9 +116,15 @@ The embedded chat session also gets every tool from `figma-console-mcp`
 (spawned via `npx`), for full read/write coverage of the file beyond what
 this project's own tools handle — this list is pulled live from the
 installed package, not hand-maintained, so it stays accurate as that
-package adds tools. **Requires the vendored `figma-desktop-bridge/` plugin
-to also be running in Figma** (step 6 above) — without it, these tools are
-registered but calls to them fail with "not connected":
+package adds tools. This works out of the box once Claude Bridge is running
+(step 5 above) — the Desktop Bridge logic it needs runs invisibly inside
+this same plugin's panel, so most tools don't need anything extra. Two
+narrower exceptions, both upstream limitations rather than anything this
+project controls: a couple of tools (e.g. `figma_get_styles`) are REST-only
+in the current `figma-console-mcp` release and need a `FIGMA_ACCESS_TOKEN`
+regardless; and any tool needing live plugin-side execution can occasionally
+need the panel to have been focused at least once since Figma opened, since
+Figma throttles a plugin's background timers before its UI ever gets focus:
 
 - **Connection / diagnostics**: `figma_get_status`, `figma_diagnose`, `figma_reconnect`, `figma_navigate`, `figma_get_console_logs`, `figma_watch_console`, `figma_clear_console`, `figma_reload_plugin`, `figma_list_open_files`, `figma_take_screenshot`
 - **Reading the file**: `figma_get_file_data`, `figma_get_file_for_plugin`, `figma_get_selection`, `figma_get_design_system_kit`, `figma_get_styles`, `figma_get_text_styles`, `figma_search_components`, `figma_lint_design`

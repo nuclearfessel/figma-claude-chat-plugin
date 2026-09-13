@@ -5,6 +5,7 @@
     "strict": true,
     "typeRoots": ["./node_modules/@figma", "./node_modules/@types"],
     "moduleResolution": "node",
+    "allowJs": true,
     "noEmit": true
   },
   "include": ["src/code.ts"]

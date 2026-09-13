@@ -4,8 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild src/code.ts --bundle --outfile=dist/code.js --target=es2017 --format=iife",
-    "watch": "npm run build -- --watch",
+    "build:code": "esbuild src/code.ts --bundle --outfile=dist/code.js --target=es2017 --format=iife",
+    "build:ui": "node scripts/build-ui.mjs",
+    "build": "npm run build:code && npm run build:ui",
+    "watch": "npm run build:ui && npm run build:code -- --watch",
     "server": "node server/index.js"
   },
   "dependencies": {

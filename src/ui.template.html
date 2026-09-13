@@ -311,12 +311,12 @@
     }
   }
 
-  window.onmessage = (event) => {
-    const msg = event.data.pluginMessage;
+  window.addEventListener("message", (event) => {
+    const msg = event.data && event.data.pluginMessage;
     if (!msg || !ws || ws.readyState !== WebSocket.OPEN) return;
     // Result of a figma_* command executed on behalf of an external session.
     ws.send(JSON.stringify(msg));
-  };
+  });
 
   function send() {
     const text = inputEl.value.trim();
@@ -340,6 +340,36 @@
   window.addEventListener("beforeunload", () => {
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (ws) ws.close();
+  });
+})();
+</script>
+
+<script>
+(function () {
+  // Runs figma-console-mcp's Desktop Bridge plugin (vendored, unmodified,
+  // MIT-licensed, from https://github.com/southleft/figma-console-mcp) in a
+  // hidden nested iframe, so its port-scanning WebSocket client (ports
+  // 9223-9232) is always running alongside this plugin's own chat UI — no
+  // second plugin needs to be opened/focused in Figma.
+  //
+  // The nested iframe's `parent` is THIS window, not Figma's real host, so
+  // its `parent.postMessage({pluginMessage},'*')` calls land here instead of
+  // reaching src/code.ts directly. This listener relays in both directions:
+  // messages from the nested iframe go up to the real parent (code.ts), and
+  // messages from the real parent are echoed down into the nested iframe.
+  const html = atob("__DESKTOP_BRIDGE_UI_B64__");
+  const bridgeIframe = document.createElement("iframe");
+  bridgeIframe.style.display = "none";
+  bridgeIframe.srcdoc = html;
+  document.body.appendChild(bridgeIframe);
+
+  window.addEventListener("message", (event) => {
+    if (!event.data || !event.data.pluginMessage) return;
+    if (event.source === bridgeIframe.contentWindow) {
+      parent.postMessage(event.data, "*");
+    } else if (bridgeIframe.contentWindow) {
+      bridgeIframe.contentWindow.postMessage(event.data, "*");
+    }
   });
 })();
 </script>
